@@ -2,6 +2,7 @@
   "name": "technoleite",
   "version": "1.0.0",
   "description": "TechnoLeite — Especialista IA em Laticínios",
+  "type": "module",
   "dependencies": {
     "express": "^4.18.2"
   }
