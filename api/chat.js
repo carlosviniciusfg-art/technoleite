@@ -1,8 +1,4 @@
-// api/chat.js — Vercel Serverless Function
-// A chave API fica segura no servidor (variável de ambiente)
-// O frontend nunca vê a chave
-
-const SYSTEM_PROMPT = `Você é o Eng. TechnoLeite, um especialista técnico sênior em laticínios com mais de 25 anos de experiência prática em indústrias de médio e grande porte em Minas Gerais e no Brasil.
+const SYSTEM_PROMPT = `Você é o Eng. TechnoLeite, um especialista técnico sênior em laticínios com mais de 25 anos de experiência prática em indústrias de médio e grande porte em Minas Gerais e no Brasil. Você tem profundo conhecimento em todas as etapas da cadeia laticinista.
 
 ## PERFIL E PERSONALIDADE
 - Fala de forma direta, técnica e objetiva, mas acessível
@@ -11,7 +7,6 @@ const SYSTEM_PROMPT = `Você é o Eng. TechnoLeite, um especialista técnico sê
 - Dá exemplos práticos baseados na realidade de laticínios brasileiros
 - Quando identifica um problema, propõe soluções com etapas claras e priorizadas
 - Trata o interlocutor como colega de profissão (tom técnico entre pares)
-- Quando necessário busca informações atualizadas via web search
 
 ## ÁREAS DE EXPERTISE
 
@@ -29,7 +24,6 @@ const SYSTEM_PROMPT = `Você é o Eng. TechnoLeite, um especialista técnico sê
 - Manteiga e creme de leite: processos, desnate, batedura, lavagem
 - Iogurtes e bebidas lácteas fermentadas
 - Doce de leite, requeijão, ricota
-- Whey / soro: aproveitamento, separação, descarte
 - Rendimento industrial: fatores que impactam, como calcular e otimizar
 - Padronização de gordura: separação, padronização, adição de creme
 - pH e acidez: controle, causas de desvio, correção
@@ -88,7 +82,6 @@ const SYSTEM_PROMPT = `Você é o Eng. TechnoLeite, um especialista técnico sê
 - Responda sempre em português brasileiro com terminologia técnica do setor`;
 
 export default async function handler(req, res) {
-  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -103,19 +96,34 @@ export default async function handler(req, res) {
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
-    return res.status(500).json({ error: 'Serviço temporariamente indisponível. Tente novamente em instantes.' });
+    console.error('ANTHROPIC_API_KEY not set');
+    return res.status(500).json({ error: 'Chave API não configurada no servidor.' });
   }
 
-  const { messages } = req.body;
+  let body;
+  try {
+    body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+  } catch (e) {
+    return res.status(400).json({ error: 'JSON inválido' });
+  }
+
+  const { messages } = body || {};
   if (!messages || !Array.isArray(messages)) {
     return res.status(400).json({ error: 'Formato de mensagem inválido' });
   }
 
-  // Limitar histórico para controlar custos (últimas 20 mensagens)
-  const trimmedMessages = messages.slice(-20);
+  // Sanitizar mensagens — garantir que só text simples vai para API
+  const cleanMessages = messages.slice(-20).map(m => {
+    if (typeof m.content === 'string') return { role: m.role, content: m.content };
+    if (Array.isArray(m.content)) {
+      const text = m.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+      return { role: m.role, content: text || '...' };
+    }
+    return { role: m.role, content: String(m.content) };
+  });
 
   try {
-    const anthropicResponse = await fetch('https://api.anthropic.com/v1/messages', {
+    const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -126,45 +134,30 @@ export default async function handler(req, res) {
         model: 'claude-sonnet-4-20250514',
         max_tokens: 2048,
         system: SYSTEM_PROMPT,
-        tools: [
-          {
-            type: 'web_search_20250305',
-            name: 'web_search',
-            max_uses: 2
-          }
-        ],
-        messages: trimmedMessages
+        messages: cleanMessages
       })
     });
 
-    if (!anthropicResponse.ok) {
-      const errData = await anthropicResponse.json().catch(() => ({}));
-      console.error('Anthropic API error:', errData);
+    const responseText = await anthropicRes.text();
 
-      if (anthropicResponse.status === 529) {
-        return res.status(503).json({ error: 'Serviço sobrecarregado. Tente novamente em alguns segundos.' });
-      }
-      return res.status(502).json({ error: 'Erro ao processar sua pergunta. Tente novamente.' });
+    if (!anthropicRes.ok) {
+      console.error('Anthropic error:', anthropicRes.status, responseText);
+      return res.status(502).json({
+        error: `Erro da API (${anthropicRes.status}). Verifique se a chave API está correta e com saldo.`
+      });
     }
 
-    const data = await anthropicResponse.json();
+    const data = JSON.parse(responseText);
 
-    // Extrair texto das respostas (pode ter tool_use e text misturados)
-    let fullText = '';
-    for (const block of data.content) {
-      if (block.type === 'text') {
-        fullText += block.text;
-      }
-    }
+    const fullText = (data.content || [])
+      .filter(b => b.type === 'text')
+      .map(b => b.text)
+      .join('');
 
-    return res.status(200).json({
-      text: fullText.trim(),
-      content: data.content,
-      usage: data.usage
-    });
+    return res.status(200).json({ text: fullText.trim() });
 
   } catch (error) {
-    console.error('Handler error:', error);
-    return res.status(500).json({ error: 'Erro interno. Tente novamente.' });
+    console.error('Handler error:', error.message);
+    return res.status(500).json({ error: 'Erro interno: ' + error.message });
   }
 }
