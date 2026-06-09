@@ -654,12 +654,8 @@ async function sendMessage() {
     const data = await res.json();
     if (data.text) {
       addMsg('ai', data.text);
-      // Adicionar ao histórico como assistant com content completo
-      if (data.content) {
-        history.push({ role: 'assistant', content: data.content });
-      } else {
-        history.push({ role: 'assistant', content: data.text });
-      }
+      // Sempre string pura no histórico — evita problemas de serialização
+      history.push({ role: 'assistant', content: data.text });
     } else {
       addMsg('sys', 'Não recebi uma resposta. Tente novamente.');
       history.pop();
